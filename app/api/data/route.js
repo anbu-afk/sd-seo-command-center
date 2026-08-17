@@ -112,17 +112,20 @@ async function fetchOpenPanel(cfg) {
     ["subs", { name: "subscription_purchased", segment: "event" }],
     ["revenue", { name: "subscription_purchased", segment: "property_sum", property: "amount" }],
   ];
+  const heavy = cfg.debug || !!cfg.breakdown;
   try {
-    // Run every OpenPanel call concurrently (serverless has a short timeout).
-    const [totalsRes, bdRes, sample] = await Promise.all([
-      Promise.all(specs.map(([key, spec]) => opChart({ ...spec, days }).then((res) => [key, res]))),
-      Promise.all(specs.map(([key, spec]) => opChart({ ...spec, breakdown, days }).then((res) => [key, res]))),
-      opSampleEvent(days),
-    ]);
+    // Totals are fast (3 concurrent calls). The per-lander breakdown + sample are
+    // heavy, so only run them when explicitly probing (?debug=1 or ?bd=...).
+    const totalsRes = await Promise.all(specs.map(([key, spec]) => opChart({ ...spec, days }).then((res) => [key, res])));
     for (const [key, res] of totalsRes) {
       out.totals[key] = seriesTotal(res.json);
       out.debug[key] = { status: res.status, raw: res.raw };
     }
+    if (!heavy) return out;
+    const [bdRes, sample] = await Promise.all([
+      Promise.all(specs.map(([key, spec]) => opChart({ ...spec, breakdown, days }).then((res) => [key, res]))),
+      opSampleEvent(days),
+    ]);
     for (const [key, res] of bdRes) {
       const list = (res.json && (res.json.series || res.json.data)) || [];
       out.debug[key + "_bd"] = { status: res.status, raw: res.raw };
@@ -145,6 +148,7 @@ export async function GET(request) {
   const cfg = {
     breakdown: u.searchParams.get("bd") || null,
     days: Number(u.searchParams.get("days")) || OP_DAYS,
+    debug: u.searchParams.get("debug") === "1",
   };
   const [seo, op] = await Promise.all([
     fetchMetabase().catch((e) => ({ ok: false, error: String(e), rows: [] })),
