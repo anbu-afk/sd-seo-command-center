@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const maxDuration = 60;
 
 const MB_BASE = process.env.MB_BASE || "https://geared-nemo.metabaseapp.com";
 const MB_API_KEY = process.env.MB_API_KEY || "";
@@ -101,13 +102,17 @@ async function fetchOpenPanel(cfg) {
     ["revenue", { name: "subscription_purchased", segment: "property_sum", property: "amount" }],
   ];
   try {
-    for (const [key, spec] of specs) {
-      const res = await opChart({ ...spec, days });
+    // Run every OpenPanel call concurrently (serverless has a short timeout).
+    const [totalsRes, bdRes, sample] = await Promise.all([
+      Promise.all(specs.map(([key, spec]) => opChart({ ...spec, days }).then((res) => [key, res]))),
+      Promise.all(specs.map(([key, spec]) => opChart({ ...spec, breakdown, days }).then((res) => [key, res]))),
+      opSampleEvent(days),
+    ]);
+    for (const [key, res] of totalsRes) {
       out.totals[key] = seriesTotal(res.json);
       out.debug[key] = { status: res.status, raw: res.raw };
     }
-    for (const [key, spec] of specs) {
-      const res = await opChart({ ...spec, breakdown, days });
+    for (const [key, res] of bdRes) {
       const list = (res.json && (res.json.series || res.json.data)) || [];
       out.debug[key + "_bd"] = { status: res.status, raw: res.raw };
       if (Array.isArray(list)) {
@@ -119,7 +124,7 @@ async function fetchOpenPanel(cfg) {
         }
       }
     }
-    out.debug.sampleEvent = await opSampleEvent(days);
+    out.debug.sampleEvent = sample;
   } catch (e) { out.ok = false; out.error = String(e); }
   return out;
 }
