@@ -24,12 +24,12 @@ order by clicks_28d desc nulls last`;
 
 async function fetchMetabase() {
   if (!MB_API_KEY) return { ok: false, error: "MB_API_KEY not set", rows: [] };
-  const r = await fetch(`${MB_BASE}/api/dataset`, {
+  const r = await tfetch(`${MB_BASE}/api/dataset`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": MB_API_KEY },
     body: JSON.stringify({ database: MB_DB_ID, type: "native", native: { query: SEO_SQL } }),
     cache: "no-store",
-  });
+  }, 12000);
   const j = await r.json();
   if (j.error || !j.data) return { ok: false, error: j.error || `HTTP ${r.status}`, rows: [] };
   const cols = j.data.cols.map((c) => c.name);
@@ -54,6 +54,13 @@ function qsBuild(obj, prefix, out) {
   return out.join("&");
 }
 
+async function tfetch(url, opts, ms) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms || 9000);
+  try { return await fetch(url, { ...opts, signal: ctl.signal }); }
+  finally { clearTimeout(t); }
+}
+
 const OP_HEADERS = { "openpanel-client-id": OP_CLIENT_ID, "openpanel-client-secret": OP_CLIENT_SECRET };
 
 async function opChart({ name, segment, property, breakdown, days }) {
@@ -65,19 +72,23 @@ async function opChart({ name, segment, property, breakdown, days }) {
   };
   if (breakdown) params.breakdowns = [{ id: "0", name: breakdown }];
   const url = `${OP_BASE}/api/export/charts?${qsBuild(params)}`;
-  const r = await fetch(url, { headers: OP_HEADERS, cache: "no-store" });
-  const text = await r.text();
-  let json = null; try { json = JSON.parse(text); } catch (e) {}
-  return { status: r.status, json, raw: text.slice(0, 1800) };
+  try {
+    const r = await tfetch(url, { headers: OP_HEADERS, cache: "no-store" }, 9000);
+    const text = await r.text();
+    let json = null; try { json = JSON.parse(text); } catch (e) {}
+    return { status: r.status, json, raw: text.slice(0, 1800) };
+  } catch (e) { return { status: 0, json: null, raw: "fetch error: " + String(e) }; }
 }
 
 async function opSampleEvent(days) {
   const p = qsBuild({ event: "subscription_purchased",
     start: new Date(Date.now() - days * 86400000).toISOString(), end: new Date().toISOString(),
     limit: 1, includes: "profile,properties,geo,referrer,meta" });
-  const r = await fetch(`${OP_BASE}/api/export/events?${p}`, { headers: OP_HEADERS, cache: "no-store" });
-  const t = await r.text();
-  return { status: r.status, raw: t.slice(0, 3500) };
+  try {
+    const r = await tfetch(`${OP_BASE}/api/export/events?${p}`, { headers: OP_HEADERS, cache: "no-store" }, 9000);
+    const t = await r.text();
+    return { status: r.status, raw: t.slice(0, 3500) };
+  } catch (e) { return { status: 0, raw: "fetch error: " + String(e) }; }
 }
 
 function seriesTotal(json) {
