@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const maxDuration = 60;
-const VERSION = "events-v5";
+const VERSION = "probe-v6";
 
 const MB_BASE = process.env.MB_BASE || "https://geared-nemo.metabaseapp.com";
 const MB_API_KEY = process.env.MB_API_KEY || "";
@@ -104,19 +104,43 @@ function sumAmounts(rows) {
   return { total, count };
 }
 
-async function opRevenue(days) {
-  const started = Date.now();
-  const first = await opEventsPage("subscription_purchased", days, 1, PAGE_LIMIT);
-  const totalCount = first.meta.totalCount || first.data.length;
-  const pages = Math.min(Math.ceil(totalCount / PAGE_LIMIT) || 1, MAX_PAGES);
-  let agg = sumAmounts(first.data);
-  if (pages > 1) {
-    const rest = await Promise.all(
-      Array.from({ length: pages - 1 }, (_, i) => opEventsPage("subscription_purchased", days, i + 2, PAGE_LIMIT))
-    );
-    for (const r of rest) { const s = sumAmounts(r.data); agg.total += s.total; agg.count += s.count; }
+// One fast call: subscription count (totalCount) + revenue estimate from the
+// page-1 sample average. Avoids hammering ClickHouse with dozens of COUNT queries.
+async function opSubsAndRevenue(days) {
+  const r = await opEventsPage("subscription_purchased", days, 1, PAGE_LIMIT);
+  const totalCount = r.meta.totalCount || r.data.length;
+  const s = sumAmounts(r.data);
+  const avg = s.count ? s.total / s.count : 0;
+  return {
+    subs: totalCount,
+    revenue: Math.round(avg * totalCount * 100) / 100,
+    avg: Math.round(avg * 100) / 100,
+    sampleN: s.count,
+    status: r.status, ms: r.ms,
+  };
+}
+
+// Diagnostic: find the real events page-size cap and the working charts contract.
+async function opProbe(days) {
+  const limits = [1, 50, 100, 250, 500, 1000];
+  const evTests = await Promise.all(limits.map((l) =>
+    opEventsPage("subscription_purchased", days, 1, l).then((r) => ({ limit: l, rows: r.data.length, totalCount: r.meta.totalCount, status: r.status }))
+  ));
+  const ev = [{ id: "A", name: "subscription_purchased", segment: "event" }];
+  const variants = [
+    ["startDate+event", { startDate: isoStart(days), endDate: isoEnd(), interval: "day", events: ev }],
+    ["start/end names", { start: isoStart(days), end: isoEnd(), interval: "day", events: ev }],
+    ["range=1m", { range: "1m", interval: "day", events: ev }],
+    ["range=30d", { range: "30d", interval: "day", events: ev }],
+    ["propsum amount", { startDate: isoStart(days), endDate: isoEnd(), interval: "day", events: [{ id: "A", name: "subscription_purchased", segment: "property_sum", property: "amount" }] }],
+    ["metric key", { startDate: isoStart(days), endDate: isoEnd(), interval: "day", metric: "sum", events: ev }],
+  ];
+  const chartVariants = [];
+  for (const [label, params] of variants) {
+    const r = await safeFetch(`${OP_BASE}/api/export/charts?${qsBuild(params)}`, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
+    chartVariants.push({ label, status: r.status, ms: r.ms, raw: r.text.slice(0, 260) });
   }
-  return { total: Math.round(agg.total * 100) / 100, count: agg.count, pages, status: first.status, ms: Date.now() - started };
+  return { evTests, chartVariants };
 }
 
 // OpenPanel /export/charts (kept for diagnostics/breakdown probing only).
@@ -145,18 +169,20 @@ async function fetchOpenPanel(cfg) {
   const out = { ok: true, perLander: {}, totals: {}, debug: {},
     window: { days, start: isoStart(days), end: isoEnd() } };
 
-  // Counts from totalCount (reliable); revenue = sum(amount) over events.
-  const [signupsC, subsC, rev] = await Promise.all([
+  if (cfg.probe) { out.probe = await opProbe(days); return out; }
+
+  // signups count (reliable), subs count + revenue estimate (one call).
+  const [signupsC, sr] = await Promise.all([
     opCount("signup_completed", days),
-    opCount("subscription_purchased", days),
-    opRevenue(days),
+    opSubsAndRevenue(days),
   ]);
   out.totals.signups = signupsC.count;
-  out.totals.subs = subsC.count;
-  out.totals.revenue = rev.total;
+  out.totals.subs = sr.subs;
+  out.totals.revenue = sr.revenue;
+  out.totals.revenueEstimated = true;
+  out.totals.avgOrder = sr.avg;
   out.debug.signups = { status: signupsC.status, ms: signupsC.ms };
-  out.debug.subs = { status: subsC.status, ms: subsC.ms };
-  out.debug.revenue = { status: rev.status, ms: rev.ms, counted: rev.count, pages: rev.pages };
+  out.debug.subs = { status: sr.status, ms: sr.ms, avg: sr.avg, sampleN: sr.sampleN };
 
   if (cfg.debug || cfg.breakdown) {
     const bd = cfg.breakdown || OP_BREAKDOWN;
@@ -180,8 +206,9 @@ export async function GET(request) {
     breakdown: u.searchParams.get("bd") || null,
     days: Number(u.searchParams.get("days")) || OP_DAYS,
     debug: u.searchParams.get("debug") === "1",
+    probe: u.searchParams.get("probe") === "1",
   };
-  const bypass = cfg.debug || cfg.breakdown || u.searchParams.get("fresh") === "1";
+  const bypass = cfg.debug || cfg.breakdown || cfg.probe || u.searchParams.get("fresh") === "1";
   if (!bypass && CACHE.payload && Date.now() - CACHE.at < CACHE_TTL) {
     return Response.json({ ...CACHE.payload, cached: true, cacheAgeMs: Date.now() - CACHE.at },
       { headers: { "Cache-Control": "no-store" } });
@@ -204,7 +231,7 @@ export async function GET(request) {
     version: VERSION, tookMs: Date.now() - t0, generatedAt: new Date().toISOString(),
     sources: {
       metabase: { ok: seo.ok, error: seo.error || null, count: (seo.rows || []).length },
-      openpanel: { ok: op.ok, error: op.error || null, totals: op.totals || {}, window: op.window || null, debug: op.debug || null },
+      openpanel: { ok: op.ok, error: op.error || null, totals: op.totals || {}, window: op.window || null, debug: op.debug || null, probe: op.probe || null },
     },
     landers,
   };
