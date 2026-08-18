@@ -89,7 +89,7 @@ const PAGE_LIMIT = Number(process.env.OP_PAGE_LIMIT || 50);
 const MAX_PAGES = Number(process.env.OP_MAX_PAGES || 40);
 
 async function opEventsPage(event, days, page, limit) {
-  const p = qsBuild({ event, start: isoStart(days), end: isoEnd(), limit, page });
+  const p = qsBuild({ event, start: isoStart(days), end: isoEnd(), limit, page, includes: "properties" });
   const r = await safeFetch(`${OP_BASE}/api/export/events?${p}`, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
   let j = null; try { j = JSON.parse(r.text); } catch (e) {}
   return { status: r.status, ms: r.ms, data: (j && j.data) || [], meta: (j && j.meta) || {} };
