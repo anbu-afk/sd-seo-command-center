@@ -83,24 +83,40 @@ async function opCount(event, days) {
 
 // Revenue = sum of the `amount` property over subscription_purchased events.
 // The /export/charts property_sum path returns empty for this instance, so we
-// aggregate over /export/events (proven reliable) and page through results.
+// aggregate over /export/events (proven reliable). The events endpoint caps page
+// size (limit=1000 returns nothing), so we page at PAGE_LIMIT and fan out.
+const PAGE_LIMIT = Number(process.env.OP_PAGE_LIMIT || 50);
+const MAX_PAGES = Number(process.env.OP_MAX_PAGES || 40);
+
+async function opEventsPage(event, days, page, limit) {
+  const p = qsBuild({ event, start: isoStart(days), end: isoEnd(), limit, page });
+  const r = await safeFetch(`${OP_BASE}/api/export/events?${p}`, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
+  let j = null; try { j = JSON.parse(r.text); } catch (e) {}
+  return { status: r.status, ms: r.ms, data: (j && j.data) || [], meta: (j && j.meta) || {} };
+}
+
+function sumAmounts(rows) {
+  let total = 0, count = 0;
+  for (const e of rows) {
+    const a = parseFloat(e && e.properties && e.properties.amount);
+    if (!isNaN(a)) { total += a; count += 1; }
+  }
+  return { total, count };
+}
+
 async function opRevenue(days) {
   const started = Date.now();
-  let total = 0, count = 0, page = 1, pages = 1, status = 0;
-  do {
-    const p = qsBuild({ event: "subscription_purchased", start: isoStart(days), end: isoEnd(), limit: 1000, page });
-    const r = await safeFetch(`${OP_BASE}/api/export/events?${p}`, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
-    status = r.status;
-    let j = null; try { j = JSON.parse(r.text); } catch (e) {}
-    const data = (j && j.data) || [];
-    for (const e of data) {
-      const a = parseFloat(e && e.properties && e.properties.amount);
-      if (!isNaN(a)) { total += a; count += 1; }
-    }
-    pages = (j && j.meta && j.meta.pages) || 1;
-    page += 1;
-  } while (page <= pages && page <= 6); // safety cap: 6000 events
-  return { total: Math.round(total * 100) / 100, count, status, ms: Date.now() - started };
+  const first = await opEventsPage("subscription_purchased", days, 1, PAGE_LIMIT);
+  const totalCount = first.meta.totalCount || first.data.length;
+  const pages = Math.min(Math.ceil(totalCount / PAGE_LIMIT) || 1, MAX_PAGES);
+  let agg = sumAmounts(first.data);
+  if (pages > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: pages - 1 }, (_, i) => opEventsPage("subscription_purchased", days, i + 2, PAGE_LIMIT))
+    );
+    for (const r of rest) { const s = sumAmounts(r.data); agg.total += s.total; agg.count += s.count; }
+  }
+  return { total: Math.round(agg.total * 100) / 100, count: agg.count, pages, status: first.status, ms: Date.now() - started };
 }
 
 // OpenPanel /export/charts (kept for diagnostics/breakdown probing only).
@@ -140,7 +156,7 @@ async function fetchOpenPanel(cfg) {
   out.totals.revenue = rev.total;
   out.debug.signups = { status: signupsC.status, ms: signupsC.ms };
   out.debug.subs = { status: subsC.status, ms: subsC.ms };
-  out.debug.revenue = { status: rev.status, ms: rev.ms, counted: rev.count };
+  out.debug.revenue = { status: rev.status, ms: rev.ms, counted: rev.count, pages: rev.pages };
 
   if (cfg.debug || cfg.breakdown) {
     const bd = cfg.breakdown || OP_BREAKDOWN;
