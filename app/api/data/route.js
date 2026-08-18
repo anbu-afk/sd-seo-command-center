@@ -104,19 +104,26 @@ function sumAmounts(rows) {
   return { total, count };
 }
 
-// One fast call: subscription count (totalCount) + revenue estimate from the
-// page-1 sample average. Avoids hammering ClickHouse with dozens of COUNT queries.
+// Subscription count + EXACT revenue. The events endpoint serves up to 1000 rows
+// per page, so 1,226 subs = 2 pages. We sum the `amount` property directly.
 async function opSubsAndRevenue(days) {
-  const r = await opEventsPage("subscription_purchased", days, 1, PAGE_LIMIT);
-  const totalCount = r.meta.totalCount || r.data.length;
-  const s = sumAmounts(r.data);
-  const avg = s.count ? s.total / s.count : 0;
+  const started = Date.now();
+  const first = await opEventsPage("subscription_purchased", days, 1, 1000);
+  const totalCount = first.meta.totalCount || first.data.length;
+  const pages = Math.min(Math.ceil(totalCount / 1000) || 1, MAX_PAGES);
+  let agg = sumAmounts(first.data);
+  if (pages > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: pages - 1 }, (_, i) => opEventsPage("subscription_purchased", days, i + 2, 1000))
+    );
+    for (const r of rest) { const s = sumAmounts(r.data); agg.total += s.total; agg.count += s.count; }
+  }
   return {
     subs: totalCount,
-    revenue: Math.round(avg * totalCount * 100) / 100,
-    avg: Math.round(avg * 100) / 100,
-    sampleN: s.count,
-    status: r.status, ms: r.ms,
+    revenue: Math.round(agg.total * 100) / 100,
+    avg: agg.count ? Math.round((agg.total / agg.count) * 100) / 100 : 0,
+    counted: agg.count,
+    status: first.status, ms: Date.now() - started,
   };
 }
 
@@ -179,10 +186,10 @@ async function fetchOpenPanel(cfg) {
   out.totals.signups = signupsC.count;
   out.totals.subs = sr.subs;
   out.totals.revenue = sr.revenue;
-  out.totals.revenueEstimated = true;
+  out.totals.revenueEstimated = false;
   out.totals.avgOrder = sr.avg;
   out.debug.signups = { status: signupsC.status, ms: signupsC.ms };
-  out.debug.subs = { status: sr.status, ms: sr.ms, avg: sr.avg, sampleN: sr.sampleN };
+  out.debug.subs = { status: sr.status, ms: sr.ms, avg: sr.avg, counted: sr.counted };
 
   if (cfg.debug || cfg.breakdown) {
     const bd = cfg.breakdown || OP_BREAKDOWN;
