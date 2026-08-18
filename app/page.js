@@ -194,13 +194,24 @@ function Detail({ l, today, onClose }) {
         {/* Clicks per week */}
         <div style={secTitle}>Clicks per week (last 12 weeks)</div>
         {nloading ? <Skel /> : weekly.length ? (
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 90, background: "#191919", border: "1px solid rgba(191,191,191,.1)", borderRadius: 10, padding: "12px 12px 8px" }}>
-            {weekly.map((w, i) => (
-              <div key={i} title={`${w.wk}: ${fmt(w.clicks)} clicks`} style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", height: "100%" }}>
-                <div style={{ width: "100%", background: AZ, opacity: .35 + .65 * (Number(w.clicks) / maxW), borderRadius: "3px 3px 0 0", height: `${Math.max(2, (Number(w.clicks) / maxW) * 100)}%` }} />
-              </div>
-            ))}
+          <>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 130, background: "#191919", border: "1px solid rgba(191,191,191,.1)", borderRadius: 10, padding: "22px 12px 8px" }}>
+            {weekly.map((w, i) => {
+              const c = Number(w.clicks) || 0;
+              return (
+                <div key={i} title={`Week of ${(w.wk || "").slice(0, 10)}: ${fmt(c)} clicks, ${fmt(w.impressions)} impressions`} style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", height: "100%" }}>
+                  <div style={{ fontSize: 9.5, color: "#AFAFAF", marginBottom: 3, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{c || ""}</div>
+                  <div style={{ width: "100%", background: AZ, opacity: .4 + .6 * (c / maxW), borderRadius: "3px 3px 0 0", height: `${Math.max(2, (c / maxW) * 100)}%` }} />
+                </div>
+              );
+            })}
           </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "#7A7A7A", marginTop: 5 }}>
+            <span>week of {(weekly[0].wk || "").slice(0, 10)}</span>
+            <span>peak {fmt(maxW)} clicks/wk</span>
+            <span>week of {(weekly[weekly.length - 1].wk || "").slice(0, 10)}</span>
+          </div>
+          </>
         ) : <Empty>No weekly Google data for this page (it may be dark).</Empty>}
 
         {/* What people search */}
