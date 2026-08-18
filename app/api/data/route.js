@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const maxDuration = 60;
+const VERSION = "race-v4";
 
 const MB_BASE = process.env.MB_BASE || "https://geared-nemo.metabaseapp.com";
 const MB_API_KEY = process.env.MB_API_KEY || "";
@@ -10,6 +11,7 @@ const OP_CLIENT_ID = process.env.OP_CLIENT_ID || "";
 const OP_CLIENT_SECRET = process.env.OP_CLIENT_SECRET || "";
 const OP_BREAKDOWN = process.env.OP_BREAKDOWN || "properties.__path";
 const OP_DAYS = Number(process.env.OP_DAYS || 30);
+const OP_TIMEOUT = Number(process.env.OP_TIMEOUT || 20000);
 
 const SEO_SQL = `
 select slug, keyword,
@@ -22,16 +24,28 @@ select slug, keyword,
 from public.seo_page_scorecard
 order by clicks_28d desc nulls last`;
 
+// Guarantees a resolved value within ms even if the fetch never settles.
+function safeFetch(url, opts, ms) {
+  const ctl = new AbortController();
+  const started = Date.now();
+  const p = fetch(url, { ...opts, signal: ctl.signal })
+    .then(async (r) => ({ status: r.status, text: await r.text(), ms: Date.now() - started }))
+    .catch((e) => ({ status: 0, text: "error: " + String(e), ms: Date.now() - started }));
+  let timer;
+  const timeout = new Promise((res) => { timer = setTimeout(() => { try { ctl.abort(); } catch (e) {} res({ status: 0, text: "timeout", ms: ms }); }, ms || 12000); });
+  return Promise.race([p.then((v) => { clearTimeout(timer); return v; }), timeout]);
+}
+
 async function fetchMetabase() {
   if (!MB_API_KEY) return { ok: false, error: "MB_API_KEY not set", rows: [] };
-  const r = await tfetch(`${MB_BASE}/api/dataset`, {
+  const r = await safeFetch(`${MB_BASE}/api/dataset`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": MB_API_KEY },
     body: JSON.stringify({ database: MB_DB_ID, type: "native", native: { query: SEO_SQL } }),
     cache: "no-store",
-  }, 12000);
-  const j = await r.json();
-  if (j.error || !j.data) return { ok: false, error: j.error || `HTTP ${r.status}`, rows: [] };
+  }, 15000);
+  let j = null; try { j = JSON.parse(r.text); } catch (e) {}
+  if (!j || j.error || !j.data) return { ok: false, error: (j && j.error) || `HTTP ${r.status}`, rows: [] };
   const cols = j.data.cols.map((c) => c.name);
   const rows = j.data.rows.map((row) => Object.fromEntries(row.map((v, i) => [cols[i], v])));
   return { ok: true, rows };
@@ -54,13 +68,6 @@ function qsBuild(obj, prefix, out) {
   return out.join("&");
 }
 
-async function tfetch(url, opts, ms) {
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), ms || 9000);
-  try { return await fetch(url, { ...opts, signal: ctl.signal }); }
-  finally { clearTimeout(t); }
-}
-
 const OP_HEADERS = { "openpanel-client-id": OP_CLIENT_ID, "openpanel-client-secret": OP_CLIENT_SECRET };
 
 async function opChart({ name, segment, property, breakdown, days }) {
@@ -72,23 +79,17 @@ async function opChart({ name, segment, property, breakdown, days }) {
   };
   if (breakdown) params.breakdowns = [{ id: "0", name: breakdown }];
   const url = `${OP_BASE}/api/export/charts?${qsBuild(params)}`;
-  try {
-    const r = await tfetch(url, { headers: OP_HEADERS, cache: "no-store" }, 9000);
-    const text = await r.text();
-    let json = null; try { json = JSON.parse(text); } catch (e) {}
-    return { status: r.status, json, raw: text.slice(0, 1800) };
-  } catch (e) { return { status: 0, json: null, raw: "fetch error: " + String(e) }; }
+  const r = await safeFetch(url, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
+  let json = null; try { json = JSON.parse(r.text); } catch (e) {}
+  return { status: r.status, ms: r.ms, json, raw: r.text.slice(0, 1600) };
 }
 
 async function opSampleEvent(days) {
   const p = qsBuild({ event: "subscription_purchased",
     start: new Date(Date.now() - days * 86400000).toISOString(), end: new Date().toISOString(),
     limit: 1, includes: "profile,properties,geo,referrer,meta" });
-  try {
-    const r = await tfetch(`${OP_BASE}/api/export/events?${p}`, { headers: OP_HEADERS, cache: "no-store" }, 9000);
-    const t = await r.text();
-    return { status: r.status, raw: t.slice(0, 3500) };
-  } catch (e) { return { status: 0, raw: "fetch error: " + String(e) }; }
+  const r = await safeFetch(`${OP_BASE}/api/export/events?${p}`, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
+  return { status: r.status, ms: r.ms, raw: r.text.slice(0, 3500) };
 }
 
 function seriesTotal(json) {
@@ -113,33 +114,29 @@ async function fetchOpenPanel(cfg) {
     ["revenue", { name: "subscription_purchased", segment: "property_sum", property: "amount" }],
   ];
   const heavy = cfg.debug || !!cfg.breakdown;
-  try {
-    // Totals are fast (3 concurrent calls). The per-lander breakdown + sample are
-    // heavy, so only run them when explicitly probing (?debug=1 or ?bd=...).
-    const totalsRes = await Promise.all(specs.map(([key, spec]) => opChart({ ...spec, days }).then((res) => [key, res])));
-    for (const [key, res] of totalsRes) {
-      out.totals[key] = seriesTotal(res.json);
-      out.debug[key] = { status: res.status, raw: res.raw };
-    }
-    if (!heavy) return out;
-    const [bdRes, sample] = await Promise.all([
-      Promise.all(specs.map(([key, spec]) => opChart({ ...spec, breakdown, days }).then((res) => [key, res]))),
-      opSampleEvent(days),
-    ]);
-    for (const [key, res] of bdRes) {
-      const list = (res.json && (res.json.series || res.json.data)) || [];
-      out.debug[key + "_bd"] = { status: res.status, raw: res.raw };
-      if (Array.isArray(list)) {
-        for (const s of list) {
-          const label = (s.name ?? s.label ?? (Array.isArray(s.breakdowns) ? s.breakdowns.join("/") : "") ?? "").toString();
-          const val = s.metrics?.sum ?? s.total ?? s.value ?? (Array.isArray(s.data) ? s.data.reduce((a, b) => a + (b.count ?? b.value ?? 0), 0) : 0);
-          const slug = label.replace(/^https?:\/\/[^/]+/, "").replace(/^\//, "").split(/[/?]/)[0] || label;
-          if (slug) { (out.perLander[slug] = out.perLander[slug] || {})[key] = (out.perLander[slug][key] || 0) + val; }
-        }
+  const totalsRes = await Promise.all(specs.map(([key, spec]) => opChart({ ...spec, days }).then((res) => [key, res])));
+  for (const [key, res] of totalsRes) {
+    out.totals[key] = seriesTotal(res.json);
+    out.debug[key] = { status: res.status, ms: res.ms, raw: res.raw };
+  }
+  if (!heavy) return out;
+  const [bdRes, sample] = await Promise.all([
+    Promise.all(specs.map(([key, spec]) => opChart({ ...spec, breakdown, days }).then((res) => [key, res]))),
+    opSampleEvent(days),
+  ]);
+  for (const [key, res] of bdRes) {
+    const list = (res.json && (res.json.series || res.json.data)) || [];
+    out.debug[key + "_bd"] = { status: res.status, ms: res.ms, raw: res.raw };
+    if (Array.isArray(list)) {
+      for (const s of list) {
+        const label = (s.name ?? s.label ?? (Array.isArray(s.breakdowns) ? s.breakdowns.join("/") : "") ?? "").toString();
+        const val = s.metrics?.sum ?? s.total ?? s.value ?? (Array.isArray(s.data) ? s.data.reduce((a, b) => a + (b.count ?? b.value ?? 0), 0) : 0);
+        const slug = label.replace(/^https?:\/\/[^/]+/, "").replace(/^\//, "").split(/[/?]/)[0] || label;
+        if (slug) { (out.perLander[slug] = out.perLander[slug] || {})[key] = (out.perLander[slug][key] || 0) + val; }
       }
     }
-    out.debug.sampleEvent = sample;
-  } catch (e) { out.ok = false; out.error = String(e); }
+  }
+  out.debug.sampleEvent = sample;
   return out;
 }
 
@@ -150,6 +147,7 @@ export async function GET(request) {
     days: Number(u.searchParams.get("days")) || OP_DAYS,
     debug: u.searchParams.get("debug") === "1",
   };
+  const t0 = Date.now();
   const [seo, op] = await Promise.all([
     fetchMetabase().catch((e) => ({ ok: false, error: String(e), rows: [] })),
     fetchOpenPanel(cfg).catch((e) => ({ ok: false, error: String(e), perLander: {}, totals: {}, debug: {} })),
@@ -164,7 +162,7 @@ export async function GET(request) {
     };
   });
   return Response.json({
-    generatedAt: new Date().toISOString(),
+    version: VERSION, tookMs: Date.now() - t0, generatedAt: new Date().toISOString(),
     sources: {
       metabase: { ok: seo.ok, error: seo.error || null, count: (seo.rows || []).length },
       openpanel: { ok: op.ok, error: op.error || null, totals: op.totals || {}, breakdownUsed: op.breakdownUsed, window: op.window || null, debug: op.debug || null },
