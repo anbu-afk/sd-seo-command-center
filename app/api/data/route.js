@@ -162,10 +162,31 @@ async function opChart({ events, breakdowns, days }) {
   return { status: r.status, ms: r.ms, json, raw: r.text.slice(0, 1600) };
 }
 
-async function opSampleEvent(event, days) {
+async function opSampleEvent(event, days, chars) {
   const p = qsBuild({ event, start: isoStart(days), end: isoEnd(), limit: 1, includes: "profile,properties,geo,referrer,meta" });
   const r = await safeFetch(`${OP_BASE}/api/export/events?${p}`, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
-  return { status: r.status, ms: r.ms, raw: r.text.slice(0, 3500) };
+  return { status: r.status, ms: r.ms, raw: r.text.slice(0, chars || 3500) };
+}
+
+// Probe attribution feasibility: full samples + test a path filter on signups.
+async function opAttribProbe(days) {
+  const [sub, signup] = await Promise.all([
+    opSampleEvent("subscription_purchased", days, 4500),
+    opSampleEvent("signup_completed", days, 4500),
+  ]);
+  // Can we filter events by path server-side? Try a few filter encodings on signup_completed.
+  const filterTests = [];
+  const encodings = [
+    ["path is /gay-ai", { event: "signup_completed", start: isoStart(days), end: isoEnd(), limit: 1, filters: [{ name: "path", operator: "is", value: ["/gay-ai"] }] }],
+    ["path contains gay-ai", { event: "signup_completed", start: isoStart(days), end: isoEnd(), limit: 1, filters: [{ name: "path", operator: "contains", value: ["gay-ai"] }] }],
+    ["origin_path is /gay-ai", { event: "signup_completed", start: isoStart(days), end: isoEnd(), limit: 1, filters: [{ name: "origin_path", operator: "is", value: ["/gay-ai"] }] }],
+  ];
+  for (const [label, params] of encodings) {
+    const r = await safeFetch(`${OP_BASE}/api/export/events?${qsBuild(params)}`, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
+    let j = null; try { j = JSON.parse(r.text); } catch (e) {}
+    filterTests.push({ label, status: r.status, totalCount: j && j.meta ? j.meta.totalCount : null, err: j && j.error ? String(j.error).slice(0, 120) : (r.status >= 400 ? r.text.slice(0, 160) : null) });
+  }
+  return { sub, signup, filterTests };
 }
 
 async function fetchOpenPanel(cfg) {
@@ -177,6 +198,7 @@ async function fetchOpenPanel(cfg) {
     window: { days, start: isoStart(days), end: isoEnd() } };
 
   if (cfg.probe) { out.probe = await opProbe(days); return out; }
+  if (cfg.attrib) { out.attrib = await opAttribProbe(days); return out; }
 
   // signups count (reliable), subs count + revenue estimate (one call).
   const [signupsC, sr] = await Promise.all([
@@ -214,8 +236,9 @@ export async function GET(request) {
     days: Number(u.searchParams.get("days")) || OP_DAYS,
     debug: u.searchParams.get("debug") === "1",
     probe: u.searchParams.get("probe") === "1",
+    attrib: u.searchParams.get("attrib") === "1",
   };
-  const bypass = cfg.debug || cfg.breakdown || cfg.probe || u.searchParams.get("fresh") === "1";
+  const bypass = cfg.debug || cfg.breakdown || cfg.probe || cfg.attrib || u.searchParams.get("fresh") === "1";
   if (!bypass && CACHE.payload && Date.now() - CACHE.at < CACHE_TTL) {
     return Response.json({ ...CACHE.payload, cached: true, cacheAgeMs: Date.now() - CACHE.at },
       { headers: { "Cache-Control": "no-store" } });
@@ -238,7 +261,7 @@ export async function GET(request) {
     version: VERSION, tookMs: Date.now() - t0, generatedAt: new Date().toISOString(),
     sources: {
       metabase: { ok: seo.ok, error: seo.error || null, count: (seo.rows || []).length },
-      openpanel: { ok: op.ok, error: op.error || null, totals: op.totals || {}, window: op.window || null, debug: op.debug || null, probe: op.probe || null },
+      openpanel: { ok: op.ok, error: op.error || null, totals: op.totals || {}, window: op.window || null, debug: op.debug || null, probe: op.probe || null, attrib: op.attrib || null },
     },
     landers,
   };
