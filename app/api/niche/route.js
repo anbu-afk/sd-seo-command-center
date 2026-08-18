@@ -27,8 +27,12 @@ export async function GET(request) {
   const u = new URL(request.url);
   const slugRaw = u.searchParams.get("slug") || "";
   const slug = slugRaw.toLowerCase().replace(/[^a-z0-9-]/g, "");
-  if (!slug) return Response.json({ ok: false, error: "no slug" });
   if (!MB_API_KEY) return Response.json({ ok: false, error: "MB_API_KEY not set" });
+  if (u.searchParams.get("cols") === "1") {
+    const c = await mbQuery(`select table_name, column_name, data_type from information_schema.columns where table_schema='public' and table_name in ('seo_page_queries','seo_page_perf_daily') order by table_name, ordinal_position`);
+    return Response.json({ ok: c.ok, error: c.error || null, cols: c.rows || [] });
+  }
+  if (!slug) return Response.json({ ok: false, error: "no slug" });
 
   const weeklySql = `
     select date_trunc('week', date)::date as wk,
