@@ -189,6 +189,31 @@ async function opAttribProbe(days) {
   return { sub, signup, filterTests };
 }
 
+// Page signup_completed and tally the `path` each signup fired on.
+// Tells us whether on-page (lander-URL) signups exist before building a column.
+async function opPathProbe(days, maxPages) {
+  const started = Date.now();
+  const first = await opEventsPage("signup_completed", days, 1, 1000);
+  const totalCount = first.meta.totalCount || first.data.length;
+  const pages = Math.min(Math.ceil(totalCount / 1000) || 1, maxPages || 40);
+  const rows = [...first.data];
+  if (pages > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: pages - 1 }, (_, i) => opEventsPage("signup_completed", days, i + 2, 1000))
+    );
+    for (const r of rest) rows.push(...r.data);
+  }
+  const tally = {};
+  let single = 0;
+  for (const e of rows) {
+    const p = (e && e.path) || "(none)";
+    tally[p] = (tally[p] || 0) + 1;
+    if (/^\/[a-z0-9-]+$/i.test(p)) single += 1; // single-segment path like /gay-ai
+  }
+  const top = Object.entries(tally).sort((a, b) => b[1] - a[1]).slice(0, 60).map(([path, n]) => ({ path, n }));
+  return { totalCount, scanned: rows.length, pages, singleSegment: single, top, ms: Date.now() - started };
+}
+
 async function fetchOpenPanel(cfg) {
   const days = cfg.days || OP_DAYS;
   if (!OP_CLIENT_ID || !OP_CLIENT_SECRET) {
@@ -199,6 +224,7 @@ async function fetchOpenPanel(cfg) {
 
   if (cfg.probe) { out.probe = await opProbe(days); return out; }
   if (cfg.attrib) { out.attrib = await opAttribProbe(days); return out; }
+  if (cfg.paths) { out.paths = await opPathProbe(days, cfg.maxPages); return out; }
 
   // signups count (reliable), subs count + revenue estimate (one call).
   const [signupsC, sr] = await Promise.all([
@@ -237,8 +263,10 @@ export async function GET(request) {
     debug: u.searchParams.get("debug") === "1",
     probe: u.searchParams.get("probe") === "1",
     attrib: u.searchParams.get("attrib") === "1",
+    paths: u.searchParams.get("paths") === "1",
+    maxPages: Number(u.searchParams.get("maxPages")) || 40,
   };
-  const bypass = cfg.debug || cfg.breakdown || cfg.probe || cfg.attrib || u.searchParams.get("fresh") === "1";
+  const bypass = cfg.debug || cfg.breakdown || cfg.probe || cfg.attrib || cfg.paths || u.searchParams.get("fresh") === "1";
   if (!bypass && CACHE.payload && Date.now() - CACHE.at < CACHE_TTL) {
     return Response.json({ ...CACHE.payload, cached: true, cacheAgeMs: Date.now() - CACHE.at },
       { headers: { "Cache-Control": "no-store" } });
@@ -261,7 +289,7 @@ export async function GET(request) {
     version: VERSION, tookMs: Date.now() - t0, generatedAt: new Date().toISOString(),
     sources: {
       metabase: { ok: seo.ok, error: seo.error || null, count: (seo.rows || []).length },
-      openpanel: { ok: op.ok, error: op.error || null, totals: op.totals || {}, window: op.window || null, debug: op.debug || null, probe: op.probe || null, attrib: op.attrib || null },
+      openpanel: { ok: op.ok, error: op.error || null, totals: op.totals || {}, window: op.window || null, debug: op.debug || null, probe: op.probe || null, attrib: op.attrib || null, paths: op.paths || null },
     },
     landers,
   };
