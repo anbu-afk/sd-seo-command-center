@@ -84,10 +84,11 @@ export default function Page() {
   const mb = data && data.sources ? data.sources.metabase : null;
   const op = data && data.sources ? data.sources.openpanel : null;
   const opTot = op && op.totals ? op.totals : {};
-  const totSignups = opTot.signups || 0;
-  const totSubs = opTot.subs || 0;
   const totRev = opTot.revenue || 0;
   const totClicks = landers.reduce((a, l) => a + (l.clicks || 0), 0);
+  // SEO-page conversions: summed from the per-lander attribution, not site-wide.
+  const seoSignups = landers.reduce((a, l) => a + (conv(l).signups || 0), 0);
+  const seoSubs = landers.reduce((a, l) => a + (conv(l).subs || 0), 0);
   const today = data ? new Date(data.generatedAt) : new Date();
   const dark = landers.filter((l) => isDark(l, today)).length;
   const off = landers.filter((l) => isOffTarget(l)).length;
@@ -113,10 +114,10 @@ export default function Page() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 14 }}>
-        <Kpi label="Clicks (28d)" value={fmt(totClicks)} sub={landers.length + " landers"} />
-        <Kpi label="Signups (30d)" value={totSignups ? fmt(totSignups) : "-"} sub="site-wide, OpenPanel" />
-        <Kpi label="Subscriptions (30d)" value={totSubs ? fmt(totSubs) : "-"} sub="site-wide, OpenPanel" />
-        <Kpi label="Revenue (30d)" value={totRev ? "$" + fmt(Math.round(totRev)) : "-"} sub={opTot.avgOrder ? "$" + opTot.avgOrder + " avg order" : "site-wide"} />
+        <Kpi label="Clicks (28d)" value={fmt(totClicks)} sub={landers.length + " SEO landers"} />
+        <Kpi label="Signups (SEO, 30d)" value={fmt(seoSignups)} sub="from SEO landers" />
+        <Kpi label="Subscriptions (SEO, 30d)" value={fmt(seoSubs)} sub="from SEO landers" />
+        <Kpi label="Revenue (30d)" value={totRev ? "$" + fmt(Math.round(totRev)) : "-"} sub="site-wide, OpenPanel" />
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20 }}>
