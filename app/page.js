@@ -89,6 +89,7 @@ export default function Page() {
   // SEO-page conversions: summed from the per-lander attribution, not site-wide.
   const seoSignups = landers.reduce((a, l) => a + (conv(l).signups || 0), 0);
   const seoSubs = landers.reduce((a, l) => a + (conv(l).subs || 0), 0);
+  const seoRev = landers.reduce((a, l) => a + (conv(l).revenue || 0), 0);
   const today = data ? new Date(data.generatedAt) : new Date();
   const dark = landers.filter((l) => isDark(l, today)).length;
   const off = landers.filter((l) => isOffTarget(l)).length;
@@ -117,7 +118,7 @@ export default function Page() {
         <Kpi label="Clicks (28d)" value={fmt(totClicks)} sub={landers.length + " SEO landers"} />
         <Kpi label="Signups (SEO, 30d)" value={fmt(seoSignups)} sub="from SEO landers" />
         <Kpi label="Subscriptions (SEO, 30d)" value={fmt(seoSubs)} sub="from SEO landers" />
-        <Kpi label="Revenue (30d)" value={totRev ? "$" + fmt(Math.round(totRev)) : "-"} sub="site-wide, OpenPanel" />
+        <Kpi label="Revenue (SEO, 30d)" value={"$" + Number(Math.round(seoRev * 100) / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })} sub="from SEO landers" />
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20 }}>
