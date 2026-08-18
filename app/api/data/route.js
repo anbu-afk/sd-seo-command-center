@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const maxDuration = 60;
-const VERSION = "race-v4";
+const VERSION = "events-v5";
 
 const MB_BASE = process.env.MB_BASE || "https://geared-nemo.metabaseapp.com";
 const MB_API_KEY = process.env.MB_API_KEY || "";
@@ -70,26 +70,27 @@ function qsBuild(obj, prefix, out) {
 
 const OP_HEADERS = { "openpanel-client-id": OP_CLIENT_ID, "openpanel-client-secret": OP_CLIENT_SECRET };
 
-async function opChart({ name, segment, property, breakdown, days }) {
+function isoStart(days) { return new Date(Date.now() - days * 86400000).toISOString(); }
+function isoEnd() { return new Date().toISOString(); }
+
+// Reliable event COUNT via /export/events meta.totalCount (proven to return real data).
+async function opCount(event, days) {
+  const p = qsBuild({ event, start: isoStart(days), end: isoEnd(), limit: 1 });
+  const r = await safeFetch(`${OP_BASE}/api/export/events?${p}`, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
+  let j = null; try { j = JSON.parse(r.text); } catch (e) {}
+  return { status: r.status, ms: r.ms, count: (j && j.meta && j.meta.totalCount) || 0, raw: r.text.slice(0, 220) };
+}
+
+// OpenPanel /export/charts. The event-selection field is `events` (NOT `series`).
+async function opChart({ events, breakdowns, days }) {
   const params = {
-    startDate: new Date(Date.now() - days * 86400000).toISOString(),
-    endDate: new Date().toISOString(),
-    interval: "day",
-    series: [{ name, segment: segment || "event", property }],
+    startDate: isoStart(days), endDate: isoEnd(), interval: "day", chartType: "linear",
+    events, breakdowns: breakdowns || [],
   };
-  if (breakdown) params.breakdowns = [{ id: "0", name: breakdown }];
   const url = `${OP_BASE}/api/export/charts?${qsBuild(params)}`;
   const r = await safeFetch(url, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
   let json = null; try { json = JSON.parse(r.text); } catch (e) {}
   return { status: r.status, ms: r.ms, json, raw: r.text.slice(0, 1600) };
-}
-
-async function opSampleEvent(days) {
-  const p = qsBuild({ event: "subscription_purchased",
-    start: new Date(Date.now() - days * 86400000).toISOString(), end: new Date().toISOString(),
-    limit: 1, includes: "profile,properties,geo,referrer,meta" });
-  const r = await safeFetch(`${OP_BASE}/api/export/events?${p}`, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
-  return { status: r.status, ms: r.ms, raw: r.text.slice(0, 3500) };
 }
 
 function seriesTotal(json) {
@@ -100,43 +101,44 @@ function seriesTotal(json) {
   return 0;
 }
 
+async function opSampleEvent(event, days) {
+  const p = qsBuild({ event, start: isoStart(days), end: isoEnd(), limit: 1, includes: "profile,properties,geo,referrer,meta" });
+  const r = await safeFetch(`${OP_BASE}/api/export/events?${p}`, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
+  return { status: r.status, ms: r.ms, raw: r.text.slice(0, 3500) };
+}
+
 async function fetchOpenPanel(cfg) {
-  const breakdown = cfg.breakdown || OP_BREAKDOWN;
   const days = cfg.days || OP_DAYS;
   if (!OP_CLIENT_ID || !OP_CLIENT_SECRET) {
     return { ok: false, error: "OP_CLIENT_ID / OP_CLIENT_SECRET not set", perLander: {}, totals: {}, debug: {} };
   }
-  const out = { ok: true, perLander: {}, totals: {}, debug: {}, breakdownUsed: breakdown,
-    window: { days, start: new Date(Date.now() - days * 86400000).toISOString(), end: new Date().toISOString() } };
-  const specs = [
-    ["signups", { name: "signup_completed", segment: "event" }],
-    ["subs", { name: "subscription_purchased", segment: "event" }],
-    ["revenue", { name: "subscription_purchased", segment: "property_sum", property: "amount" }],
-  ];
-  const heavy = cfg.debug || !!cfg.breakdown;
-  const totalsRes = await Promise.all(specs.map(([key, spec]) => opChart({ ...spec, days }).then((res) => [key, res])));
-  for (const [key, res] of totalsRes) {
-    out.totals[key] = seriesTotal(res.json);
-    out.debug[key] = { status: res.status, ms: res.ms, raw: res.raw };
-  }
-  if (!heavy) return out;
-  const [bdRes, sample] = await Promise.all([
-    Promise.all(specs.map(([key, spec]) => opChart({ ...spec, breakdown, days }).then((res) => [key, res]))),
-    opSampleEvent(days),
+  const out = { ok: true, perLander: {}, totals: {}, debug: {},
+    window: { days, start: isoStart(days), end: isoEnd() } };
+
+  // Counts from totalCount (reliable); revenue = sum(amount) via corrected charts call.
+  const revEvents = [{ id: "A", name: "subscription_purchased", segment: "property_sum", property: "amount" }];
+  const [signupsC, subsC, revChart] = await Promise.all([
+    opCount("signup_completed", days),
+    opCount("subscription_purchased", days),
+    opChart({ events: revEvents, days }),
   ]);
-  for (const [key, res] of bdRes) {
-    const list = (res.json && (res.json.series || res.json.data)) || [];
-    out.debug[key + "_bd"] = { status: res.status, ms: res.ms, raw: res.raw };
-    if (Array.isArray(list)) {
-      for (const s of list) {
-        const label = (s.name ?? s.label ?? (Array.isArray(s.breakdowns) ? s.breakdowns.join("/") : "") ?? "").toString();
-        const val = s.metrics?.sum ?? s.total ?? s.value ?? (Array.isArray(s.data) ? s.data.reduce((a, b) => a + (b.count ?? b.value ?? 0), 0) : 0);
-        const slug = label.replace(/^https?:\/\/[^/]+/, "").replace(/^\//, "").split(/[/?]/)[0] || label;
-        if (slug) { (out.perLander[slug] = out.perLander[slug] || {})[key] = (out.perLander[slug][key] || 0) + val; }
-      }
-    }
+  out.totals.signups = signupsC.count;
+  out.totals.subs = subsC.count;
+  out.totals.revenue = Math.round(seriesTotal(revChart.json) * 100) / 100;
+  out.debug.signups = { status: signupsC.status, ms: signupsC.ms };
+  out.debug.subs = { status: subsC.status, ms: subsC.ms };
+  out.debug.revenue = { status: revChart.status, ms: revChart.ms, raw: revChart.raw };
+
+  if (cfg.debug || cfg.breakdown) {
+    const bd = cfg.breakdown || OP_BREAKDOWN;
+    const [subsBd, sample] = await Promise.all([
+      opChart({ events: [{ id: "A", name: "subscription_purchased", segment: "event" }], breakdowns: [{ id: "0", name: bd }], days }),
+      opSampleEvent("subscription_purchased", days),
+    ]);
+    out.debug.subs_bd = { status: subsBd.status, ms: subsBd.ms, raw: subsBd.raw };
+    out.debug.sampleEvent = sample;
+    out.breakdownUsed = bd;
   }
-  out.debug.sampleEvent = sample;
   return out;
 }
 
