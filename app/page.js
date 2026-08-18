@@ -63,7 +63,7 @@ export default function Page() {
         <div>
           <div style={{ fontSize: 12, letterSpacing: 2, textTransform: "uppercase", color: AZ2, fontWeight: 600 }}>Secret Desires Live</div>
           <h1 style={{ margin: "6px 0 0", fontSize: 28 }}>SEO Landers, Live Command Center</h1>
-          <p style={{ color: "#AFAFAF", fontSize: 14, maxWidth: "66ch" }}>Search rankings from Metabase joined with signups, subscriptions and revenue from OpenPanel, live on each load. Click any lander for its weekly trend, the searches that find it, and exactly what to do next.</p>
+          <p style={{ color: "#AFAFAF", fontSize: 14, maxWidth: "66ch" }}>Search rankings from Metabase, joined with per-lander signups, subscriptions and revenue attributed by OpenPanel. Click any lander for its weekly trend, the searches that find it, and exactly what to do next.</p>
         </div>
         <button onClick={load} style={{ background: AZ, color: "#fff", border: 0, borderRadius: 999, padding: "9px 18px", fontWeight: 600, cursor: "pointer" }}>{loading ? "Refreshing" : "Refresh"}</button>
       </div>
@@ -96,6 +96,9 @@ export default function Page() {
             <th style={th}>Clicks 28d</th>
             <th style={th}>Impr 28d</th>
             <th style={th}>Click rate</th>
+            <th style={{ ...th, color: AZ2 }}>Signups 30d</th>
+            <th style={{ ...th, color: AZ2 }}>Subs 30d</th>
+            <th style={{ ...th, color: AZ2 }}>Revenue 30d</th>
             <th style={{ ...th, textAlign: "center" }}>Detail</th>
           </tr></thead>
           <tbody>
@@ -114,16 +117,19 @@ export default function Page() {
                   <td style={td}>{fmt(l.clicks)}</td>
                   <td style={td}>{fmt(l.impressions)}</td>
                   <td style={td}>{l.ctr == null ? "-" : l.ctr + "%"}</td>
+                  <td style={{ ...td, color: l.signups ? "#EAEAEA" : "#555" }}>{l.signups ? fmt(l.signups) : "0"}</td>
+                  <td style={{ ...td, color: l.subs ? "#EAEAEA" : "#555" }}>{l.subs ? fmt(l.subs) : "0"}</td>
+                  <td style={{ ...td, color: l.revenue ? GREEN : "#555" }}>{l.revenue ? "$" + Number(l.revenue).toLocaleString("en-US", { maximumFractionDigits: 2 }) : "-"}</td>
                   <td style={{ ...td, textAlign: "center", color: "#7A7A7A" }}>→</td>
                 </tr>
               );
             })}
-            {!landers.length && !loading && (<tr><td colSpan={8} style={{ ...td, textAlign: "center", color: "#7A7A7A" }}>No data yet.</td></tr>)}
+            {!landers.length && !loading && (<tr><td colSpan={11} style={{ ...td, textAlign: "center", color: "#7A7A7A" }}>No data yet.</td></tr>)}
           </tbody>
         </table>
       </div>
 
-      <p style={{ color: "#7A7A7A", fontSize: 12, marginTop: 16 }}>SEO columns are live from Metabase (Google Search Console + Ahrefs). Site-wide signups, subscriptions and revenue are live from OpenPanel. Per-lander conversions are one click away in each niche&rsquo;s OpenPanel view (the subscription event does not carry the landing page, so OpenPanel attributes it there via the session).</p>
+      <p style={{ color: "#7A7A7A", fontSize: 12, marginTop: 16 }}>SEO columns (rank, clicks, impressions) are live from Metabase on every load. The pink Signups / Subs / Revenue columns are per-lander conversions from OpenPanel, attributed by each visitor&rsquo;s first-touch landing page over the last 30 days{data && data.perLanderSnapshot ? `, as of ${data.perLanderSnapshot.asOf}` : ""}. This is a first-touch estimate (a snapshot, refreshed on request), not a hard link like the SEO clicks, so read it as directional. Most subscriptions trace back to the homepage rather than a niche lander, which is why per-lander sub counts are small.</p>
 
       {sel && <Detail l={sel} today={today} onClose={() => setSel(null)} />}
     </main>
@@ -190,6 +196,18 @@ function Detail({ l, today, onClose }) {
             </div>
           ))}
         </div>
+
+        {/* Conversions */}
+        <div style={secTitle}>Conversions from this page (OpenPanel, 30 days)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 1, background: "rgba(191,191,191,.12)", border: "1px solid rgba(191,191,191,.12)", borderRadius: 10, overflow: "hidden" }}>
+          {[["Signups", l.signups ? fmt(l.signups) : "0", "#EAEAEA"], ["Subscriptions", l.subs ? fmt(l.subs) : "0", "#EAEAEA"], ["Revenue", l.revenue ? "$" + Number(l.revenue).toLocaleString("en-US", { maximumFractionDigits: 2 }) : "$0", GREEN]].map((s) => (
+            <div key={s[0]} style={{ background: "#191919", padding: "11px 13px" }}>
+              <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".3px", color: "#7A7A7A", fontWeight: 600 }}>{s[0]}</div>
+              <div style={{ fontSize: 18, fontWeight: 660, marginTop: 3, fontVariantNumeric: "tabular-nums", color: s[2] }}>{s[1]}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: 11, color: "#7A7A7A", marginTop: 7, lineHeight: 1.45 }}>Attributed by each visitor&rsquo;s first-touch landing page (a first-touch estimate, not a hard link). Snapshot from OpenPanel&rsquo;s own reports.</div>
 
         {/* Clicks per week */}
         <div style={secTitle}>Clicks per week (last 12 weeks)</div>
