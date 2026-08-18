@@ -81,7 +81,29 @@ async function opCount(event, days) {
   return { status: r.status, ms: r.ms, count: (j && j.meta && j.meta.totalCount) || 0, raw: r.text.slice(0, 220) };
 }
 
-// OpenPanel /export/charts. The event-selection field is `events` (NOT `series`).
+// Revenue = sum of the `amount` property over subscription_purchased events.
+// The /export/charts property_sum path returns empty for this instance, so we
+// aggregate over /export/events (proven reliable) and page through results.
+async function opRevenue(days) {
+  const started = Date.now();
+  let total = 0, count = 0, page = 1, pages = 1, status = 0;
+  do {
+    const p = qsBuild({ event: "subscription_purchased", start: isoStart(days), end: isoEnd(), limit: 1000, page });
+    const r = await safeFetch(`${OP_BASE}/api/export/events?${p}`, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
+    status = r.status;
+    let j = null; try { j = JSON.parse(r.text); } catch (e) {}
+    const data = (j && j.data) || [];
+    for (const e of data) {
+      const a = parseFloat(e && e.properties && e.properties.amount);
+      if (!isNaN(a)) { total += a; count += 1; }
+    }
+    pages = (j && j.meta && j.meta.pages) || 1;
+    page += 1;
+  } while (page <= pages && page <= 6); // safety cap: 6000 events
+  return { total: Math.round(total * 100) / 100, count, status, ms: Date.now() - started };
+}
+
+// OpenPanel /export/charts (kept for diagnostics/breakdown probing only).
 async function opChart({ events, breakdowns, days }) {
   const params = {
     startDate: isoStart(days), endDate: isoEnd(), interval: "day", chartType: "linear",
@@ -91,14 +113,6 @@ async function opChart({ events, breakdowns, days }) {
   const r = await safeFetch(url, { headers: OP_HEADERS, cache: "no-store" }, OP_TIMEOUT);
   let json = null; try { json = JSON.parse(r.text); } catch (e) {}
   return { status: r.status, ms: r.ms, json, raw: r.text.slice(0, 1600) };
-}
-
-function seriesTotal(json) {
-  if (!json) return 0;
-  if (json.metrics && typeof json.metrics.sum === "number") return json.metrics.sum;
-  const list = json.series || json.data || [];
-  if (Array.isArray(list)) return list.reduce((a, s) => a + (s.metrics?.sum ?? s.total ?? s.value ?? 0), 0);
-  return 0;
 }
 
 async function opSampleEvent(event, days) {
@@ -115,19 +129,18 @@ async function fetchOpenPanel(cfg) {
   const out = { ok: true, perLander: {}, totals: {}, debug: {},
     window: { days, start: isoStart(days), end: isoEnd() } };
 
-  // Counts from totalCount (reliable); revenue = sum(amount) via corrected charts call.
-  const revEvents = [{ id: "A", name: "subscription_purchased", segment: "property_sum", property: "amount" }];
-  const [signupsC, subsC, revChart] = await Promise.all([
+  // Counts from totalCount (reliable); revenue = sum(amount) over events.
+  const [signupsC, subsC, rev] = await Promise.all([
     opCount("signup_completed", days),
     opCount("subscription_purchased", days),
-    opChart({ events: revEvents, days }),
+    opRevenue(days),
   ]);
   out.totals.signups = signupsC.count;
   out.totals.subs = subsC.count;
-  out.totals.revenue = Math.round(seriesTotal(revChart.json) * 100) / 100;
+  out.totals.revenue = rev.total;
   out.debug.signups = { status: signupsC.status, ms: signupsC.ms };
   out.debug.subs = { status: subsC.status, ms: subsC.ms };
-  out.debug.revenue = { status: revChart.status, ms: revChart.ms, raw: revChart.raw };
+  out.debug.revenue = { status: rev.status, ms: rev.ms, counted: rev.count };
 
   if (cfg.debug || cfg.breakdown) {
     const bd = cfg.breakdown || OP_BREAKDOWN;
@@ -142,6 +155,9 @@ async function fetchOpenPanel(cfg) {
   return out;
 }
 
+let CACHE = { at: 0, payload: null };
+const CACHE_TTL = Number(process.env.CACHE_TTL_MS || 600000); // 10 min
+
 export async function GET(request) {
   const u = new URL(request.url);
   const cfg = {
@@ -149,6 +165,11 @@ export async function GET(request) {
     days: Number(u.searchParams.get("days")) || OP_DAYS,
     debug: u.searchParams.get("debug") === "1",
   };
+  const bypass = cfg.debug || cfg.breakdown || u.searchParams.get("fresh") === "1";
+  if (!bypass && CACHE.payload && Date.now() - CACHE.at < CACHE_TTL) {
+    return Response.json({ ...CACHE.payload, cached: true, cacheAgeMs: Date.now() - CACHE.at },
+      { headers: { "Cache-Control": "no-store" } });
+  }
   const t0 = Date.now();
   const [seo, op] = await Promise.all([
     fetchMetabase().catch((e) => ({ ok: false, error: String(e), rows: [] })),
@@ -163,12 +184,14 @@ export async function GET(request) {
       signups: conv.signups ?? null, subs: conv.subs ?? null, revenue: conv.revenue ?? null,
     };
   });
-  return Response.json({
+  const payload = {
     version: VERSION, tookMs: Date.now() - t0, generatedAt: new Date().toISOString(),
     sources: {
       metabase: { ok: seo.ok, error: seo.error || null, count: (seo.rows || []).length },
-      openpanel: { ok: op.ok, error: op.error || null, totals: op.totals || {}, breakdownUsed: op.breakdownUsed, window: op.window || null, debug: op.debug || null },
+      openpanel: { ok: op.ok, error: op.error || null, totals: op.totals || {}, window: op.window || null, debug: op.debug || null },
     },
     landers,
-  }, { headers: { "Cache-Control": "no-store" } });
+  };
+  if (!bypass && seo.ok) CACHE = { at: Date.now(), payload };
+  return Response.json({ ...payload, cached: false }, { headers: { "Cache-Control": "no-store" } });
 }
