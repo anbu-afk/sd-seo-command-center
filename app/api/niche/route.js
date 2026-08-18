@@ -45,7 +45,8 @@ export async function GET(request) {
     select query,
            sum(coalesce(impressions,0)) as impressions,
            sum(coalesce(clicks,0))      as clicks,
-           round(avg(position),1)       as position
+           round(avg(avg_position),1)   as position,
+           bool_or(is_target)           as is_target
     from public.seo_page_queries
     where slug = '${slug}'
     group by 1 order by impressions desc limit 12`;

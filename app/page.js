@@ -206,19 +206,28 @@ function Detail({ l, today, onClose }) {
         {/* What people search */}
         <div style={secTitle}>What people search to find it</div>
         {nloading ? <Skel /> : queries.length ? (
+          <>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {queries.map((q, i) => (
               <div key={i} style={{ background: "#191919", border: "1px solid rgba(191,191,191,.08)", borderRadius: 8, padding: "8px 10px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12.5 }}>
-                  <span style={{ color: "#E4E4E4", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.query}</span>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12.5, alignItems: "center" }}>
+                  <span style={{ color: "#E4E4E4", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: 999, background: q.is_target ? GREEN : AMBER, marginRight: 7 }} />
+                    {q.query}
+                  </span>
                   <span style={{ color: "#8A8A8A", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{fmt(q.impressions)} impr · {pos(q.position)}</span>
                 </div>
                 <div style={{ height: 3, background: "rgba(191,191,191,.12)", borderRadius: 3, marginTop: 6 }}>
-                  <div style={{ height: "100%", width: `${(Number(q.impressions) / maxQ) * 100}%`, background: AZ2, borderRadius: 3 }} />
+                  <div style={{ height: "100%", width: `${(Number(q.impressions) / maxQ) * 100}%`, background: q.is_target ? GREEN : AZ2, borderRadius: 3 }} />
                 </div>
               </div>
             ))}
           </div>
+          <div style={{ fontSize: 11, color: "#7A7A7A", marginTop: 8, display: "flex", gap: 14 }}>
+            <span><span style={{ display: "inline-block", width: 7, height: 7, borderRadius: 999, background: GREEN, marginRight: 6 }} />its own keyword</span>
+            <span><span style={{ display: "inline-block", width: 7, height: 7, borderRadius: 999, background: AMBER, marginRight: 6 }} />stray / off-target</span>
+          </div>
+          </>
         ) : <Empty>No query data for this page yet.</Empty>}
 
         {/* Deep links */}
