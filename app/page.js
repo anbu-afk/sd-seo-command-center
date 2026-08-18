@@ -4,6 +4,13 @@ import { useEffect, useState } from "react";
 const AZ = "#D62A5E", AZ2 = "#F46787", GREEN = "#2BA875", AMBER = "#C0851F", BLUE = "#7fbce8";
 const MB_DASH = "https://geared-nemo.metabaseapp.com/dashboard/67?lander=";
 const OP_DASH = "https://openpanel.secretdesires.ai/sd-ai/sd-ai-app/dashboards/seo-keyword-pages";
+const APP_URL = "https://seo-landers-live-anbu-1077s-projects.vercel.app/";
+
+// One-click bookmarklet: run it from a logged-in OpenPanel tab. It pulls the
+// Registrations/Subscriptions/Revenue-by-landing-page reports via OpenPanel's
+// own API (using your session), copies the snapshot to your clipboard, and
+// bounces back to the command center with the fresh numbers applied.
+const BOOKMARKLET = "javascript:(async()=>{try{var P='sd-ai-app';var g=function(u){return fetch(u,{credentials:'include'}).then(function(r){return r.json()})};var strip=function(o){if(Array.isArray(o))return o.map(strip);if(o&&typeof o==='object'){var n={};for(var k in o){if(o[k]!=null)n[k]=strip(o[k])}return n}return o};var rl=await g('/api/trpc/report.list?input='+encodeURIComponent(JSON.stringify({json:{dashboardId:'seo-keyword-pages',projectId:P}})));var reps=rl.result.data.json;var find=function(n){return reps.filter(function(r){return r.name===n})[0]};var chart=async function(rep){var cfg=strip(Object.assign({},rep,{projectId:P}));var d=await g('/api/trpc/chart.chart?input='+encodeURIComponent(JSON.stringify({json:cfg})));return d.result.data.json.series};var subsR=find('Subscriptions by Landing Page');var regsR=find('Registrations by Landing Page');var revR=JSON.parse(JSON.stringify(subsR));revR.series[0].segment='property_sum';revR.series[0].property='properties.amount';revR.metric='sum';var res=await Promise.all([chart(regsR),chart(subsR),chart(revR)]);var b=function(s){var o={};s.forEach(function(x){if(x.names.length>1)o[x.names[1]]=x.metrics.sum});return o};var R=b(res[0]),S=b(res[1]),V=b(res[2]);var per={};[R,S,V].forEach(function(o){Object.keys(o).forEach(function(s){per[s]=per[s]||{}})});Object.keys(per).forEach(function(s){per[s]={signups:R[s]||0,subs:S[s]||0,revenue:Math.round((V[s]||0)*100)/100}});var snap={asOf:new Date().toISOString().slice(0,10),window:'30d',perLander:per};var js=JSON.stringify(snap);try{await navigator.clipboard.writeText(js)}catch(e){}location.href='" + APP_URL + "#op='+encodeURIComponent(js)}catch(e){alert('OpenPanel refresh failed: '+e.message+'. Make sure you are on an OpenPanel tab and logged in.')}})();";
 const card = { background: "#191919", border: "1px solid rgba(191,191,191,.12)", borderRadius: 14, padding: 16 };
 const th = { textAlign: "right", padding: "8px 10px", fontSize: 11, letterSpacing: ".4px", textTransform: "uppercase", color: "#7A7A7A", borderBottom: "1px solid rgba(191,191,191,.12)", position: "sticky", top: 0, background: "#191919" };
 const td = { textAlign: "right", padding: "8px 10px", borderBottom: "1px solid rgba(191,191,191,.08)", fontVariantNumeric: "tabular-nums" };
@@ -34,6 +41,8 @@ export default function Page() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sel, setSel] = useState(null);
+  const [override, setOverride] = useState(null);
+  const [showRefresh, setShowRefresh] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -44,6 +53,32 @@ export default function Page() {
     setLoading(false);
   }
   useEffect(() => { load(); }, []);
+
+  // Ingest a fresh snapshot from the bookmarklet (URL hash), else from localStorage.
+  useEffect(() => {
+    try {
+      let snap = null;
+      if (typeof window !== "undefined" && window.location.hash.indexOf("#op=") === 0) {
+        snap = JSON.parse(decodeURIComponent(window.location.hash.slice(4)));
+        window.localStorage.setItem("opSnapshot", JSON.stringify(snap));
+        window.history.replaceState(null, "", window.location.pathname);
+      } else if (typeof window !== "undefined") {
+        const s = window.localStorage.getItem("opSnapshot");
+        if (s) snap = JSON.parse(s);
+      }
+      if (snap && snap.perLander) setOverride(snap);
+    } catch (e) {}
+  }, []);
+
+  const perOv = override && override.perLander ? override.perLander : null;
+  const conv = (l) => (perOv && perOv[l.slug]) ? perOv[l.slug] : { signups: l.signups, subs: l.subs, revenue: l.revenue };
+  const snapMeta = data && data.perLanderSnapshot ? data.perLanderSnapshot : null;
+  const snapDate = (override && override.asOf) || (snapMeta && snapMeta.asOf) || "";
+  function clearOverride() { try { window.localStorage.removeItem("opSnapshot"); } catch (e) {} setOverride(null); }
+  function applyPasted(text) {
+    try { const snap = JSON.parse(text); if (snap && snap.perLander) { window.localStorage.setItem("opSnapshot", JSON.stringify(snap)); setOverride(snap); setShowRefresh(false); } else alert("That does not look like a snapshot."); }
+    catch (e) { alert("Could not read that JSON: " + e.message); }
+  }
 
   const landers = data && data.landers ? data.landers : [];
   const mb = data && data.sources ? data.sources.metabase : null;
@@ -65,7 +100,10 @@ export default function Page() {
           <h1 style={{ margin: "6px 0 0", fontSize: 28 }}>SEO Landers, Live Command Center</h1>
           <p style={{ color: "#AFAFAF", fontSize: 14, maxWidth: "66ch" }}>Search rankings from Metabase, joined with per-lander signups, subscriptions and revenue attributed by OpenPanel. Click any lander for its weekly trend, the searches that find it, and exactly what to do next.</p>
         </div>
-        <button onClick={load} style={{ background: AZ, color: "#fff", border: 0, borderRadius: 999, padding: "9px 18px", fontWeight: 600, cursor: "pointer" }}>{loading ? "Refreshing" : "Refresh"}</button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={() => setShowRefresh(true)} style={{ background: "transparent", color: AZ2, border: "1px solid rgba(244,103,135,.4)", borderRadius: 999, padding: "9px 16px", fontWeight: 600, cursor: "pointer" }}>Refresh OpenPanel numbers</button>
+          <button onClick={load} style={{ background: AZ, color: "#fff", border: 0, borderRadius: 999, padding: "9px 18px", fontWeight: 600, cursor: "pointer" }}>{loading ? "Refreshing" : "Refresh SEO"}</button>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "14px 0" }}>
@@ -104,8 +142,9 @@ export default function Page() {
           <tbody>
             {landers.map((l) => {
               const d = isDark(l, today), o = isOffTarget(l);
+              const c = conv(l);
               return (
-                <tr key={l.slug} onClick={() => setSel(l)} style={{ cursor: "pointer" }}
+                <tr key={l.slug} onClick={() => setSel({ ...l, ...c })} style={{ cursor: "pointer" }}
                     onMouseEnter={(e) => (e.currentTarget.style.background = "#212121")}
                     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
                   <td style={{ ...td, textAlign: "left", color: "#EAEAEA", fontWeight: 500 }}>{l.name || l.slug}</td>
@@ -117,9 +156,9 @@ export default function Page() {
                   <td style={td}>{fmt(l.clicks)}</td>
                   <td style={td}>{fmt(l.impressions)}</td>
                   <td style={td}>{l.ctr == null ? "-" : l.ctr + "%"}</td>
-                  <td style={{ ...td, color: l.signups ? "#EAEAEA" : "#555" }}>{l.signups ? fmt(l.signups) : "0"}</td>
-                  <td style={{ ...td, color: l.subs ? "#EAEAEA" : "#555" }}>{l.subs ? fmt(l.subs) : "0"}</td>
-                  <td style={{ ...td, color: l.revenue ? GREEN : "#555" }}>{l.revenue ? "$" + Number(l.revenue).toLocaleString("en-US", { maximumFractionDigits: 2 }) : "-"}</td>
+                  <td style={{ ...td, color: c.signups ? "#EAEAEA" : "#555" }}>{c.signups ? fmt(c.signups) : "0"}</td>
+                  <td style={{ ...td, color: c.subs ? "#EAEAEA" : "#555" }}>{c.subs ? fmt(c.subs) : "0"}</td>
+                  <td style={{ ...td, color: c.revenue ? GREEN : "#555" }}>{c.revenue ? "$" + Number(c.revenue).toLocaleString("en-US", { maximumFractionDigits: 2 }) : "-"}</td>
                   <td style={{ ...td, textAlign: "center", color: "#7A7A7A" }}>→</td>
                 </tr>
               );
@@ -129,10 +168,61 @@ export default function Page() {
         </table>
       </div>
 
-      <p style={{ color: "#7A7A7A", fontSize: 12, marginTop: 16 }}>SEO columns (rank, clicks, impressions) are live from Metabase on every load. The pink Signups / Subs / Revenue columns are per-lander conversions from OpenPanel, attributed by each visitor&rsquo;s first-touch landing page over the last 30 days{data && data.perLanderSnapshot ? `, as of ${data.perLanderSnapshot.asOf}` : ""}. This is a first-touch estimate (a snapshot, refreshed on request), not a hard link like the SEO clicks, so read it as directional. Most subscriptions trace back to the homepage rather than a niche lander, which is why per-lander sub counts are small.</p>
+      <p style={{ color: "#7A7A7A", fontSize: 12, marginTop: 16 }}>SEO columns (rank, clicks, impressions) are live from Metabase on every load. The pink Signups / Subs / Revenue columns are per-lander conversions from OpenPanel, attributed by each visitor&rsquo;s first-touch landing page over the last 30 days{snapDate ? `, as of ${snapDate}` : ""}{override ? " (your last refresh)" : ""}. This is a first-touch estimate, not a hard link like the SEO clicks, so read it as directional. Most subscriptions trace back to the homepage rather than a niche lander, which is why per-lander sub counts are small. Use &ldquo;Refresh OpenPanel numbers&rdquo; above to pull the latest.</p>
+
+      {showRefresh && <RefreshModal onClose={() => setShowRefresh(false)} onApply={applyPasted} onClear={clearOverride} hasOverride={!!override} snapDate={snapDate} />}
 
       {sel && <Detail l={sel} today={today} onClose={() => setSel(null)} />}
     </main>
+  );
+}
+
+function RefreshModal({ onClose, onApply, onClear, hasOverride, snapDate }) {
+  const [paste, setPaste] = useState("");
+  const step = { display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 12 };
+  const num = { flex: "0 0 22px", height: 22, borderRadius: 999, background: AZ, color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", marginTop: 1 };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60, padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "min(560px, 96vw)", maxHeight: "90vh", overflowY: "auto", background: "#161616", border: "1px solid rgba(191,191,191,.16)", borderRadius: 16, padding: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <h2 style={{ margin: 0, fontSize: 20 }}>Refresh OpenPanel numbers</h2>
+          <button onClick={onClose} style={{ background: "transparent", color: "#AFAFAF", border: "1px solid rgba(191,191,191,.18)", borderRadius: 8, width: 30, height: 30, cursor: "pointer", fontSize: 16 }}>×</button>
+        </div>
+        <p style={{ color: "#AFAFAF", fontSize: 13, lineHeight: 1.5, marginTop: 8 }}>The per-lander numbers come from OpenPanel, which only your own login can read. This one-click tool pulls the latest and applies it here. One-time setup: drag the button below into your bookmarks bar.</p>
+
+        <div style={step}>
+          <div style={num}>1</div>
+          <div style={{ fontSize: 13, color: "#EAEAEA" }}>
+            Drag this into your bookmarks bar (once):&nbsp;
+            <a ref={(el) => { if (el) el.setAttribute("href", BOOKMARKLET); }} onClick={(e) => e.preventDefault()}
+               style={{ display: "inline-block", background: AZ, color: "#fff", textDecoration: "none", fontWeight: 700, fontSize: 12.5, padding: "6px 12px", borderRadius: 8, cursor: "grab" }}>
+              ⟳ Refresh SD OpenPanel
+            </a>
+          </div>
+        </div>
+        <div style={step}>
+          <div style={num}>2</div>
+          <div style={{ fontSize: 13, color: "#EAEAEA" }}>Open OpenPanel and make sure you are logged in:&nbsp;
+            <a href={OP_DASH} target="_blank" rel="noopener" style={{ color: AZ2 }}>open OpenPanel →</a>
+          </div>
+        </div>
+        <div style={step}>
+          <div style={num}>3</div>
+          <div style={{ fontSize: 13, color: "#EAEAEA" }}>On that OpenPanel tab, click the bookmark. It pulls the latest numbers and brings you back here with them applied.</div>
+        </div>
+
+        <div style={{ borderTop: "1px solid rgba(191,191,191,.12)", margin: "16px 0", paddingTop: 14 }}>
+          <div style={{ fontSize: 12, color: "#7A7A7A", marginBottom: 6 }}>Fallback: if the bookmark copied the numbers to your clipboard but did not bring them over, paste them here and Apply.</div>
+          <textarea value={paste} onChange={(e) => setPaste(e.target.value)} placeholder='{"asOf":"...","perLander":{...}}'
+            style={{ width: "100%", minHeight: 70, background: "#0f0f0f", color: "#C6C6C6", border: "1px solid rgba(191,191,191,.16)", borderRadius: 8, padding: 10, fontSize: 12, fontFamily: "monospace", resize: "vertical" }} />
+          <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <button onClick={() => onApply(paste)} disabled={!paste.trim()} style={{ background: paste.trim() ? AZ : "#333", color: "#fff", border: 0, borderRadius: 8, padding: "8px 16px", fontWeight: 600, cursor: paste.trim() ? "pointer" : "default" }}>Apply pasted numbers</button>
+            {hasOverride && <button onClick={onClear} style={{ background: "transparent", color: "#AFAFAF", border: "1px solid rgba(191,191,191,.18)", borderRadius: 8, padding: "8px 14px", cursor: "pointer" }}>Reset to baked snapshot</button>}
+            <span style={{ fontSize: 11.5, color: "#7A7A7A" }}>Showing: {snapDate || "baked"}{hasOverride ? " (your refresh)" : ""}</span>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
