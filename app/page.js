@@ -34,6 +34,7 @@ export default function Page() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sel, setSel] = useState(null);
+  const [trend, setTrend] = useState(null);
 
   async function load() {
     setLoading(true);
@@ -44,6 +45,9 @@ export default function Page() {
     setLoading(false);
   }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    fetch("/api/trend", { cache: "no-store" }).then((r) => r.json()).then(setTrend).catch(() => {});
+  }, []);
 
   const conv = (l) => ({ signups: l.signups, subs: l.subs, revenue: l.revenue });
   const snapMeta = data && data.perLanderSnapshot ? data.perLanderSnapshot : null;
@@ -91,6 +95,8 @@ export default function Page() {
         <Pill color={AMBER} n={off} label="landers rank for the wrong search terms" />
         <Pill color={AZ} n={dark} label="landers have gone dark (no fresh Google data)" />
       </div>
+
+      <Trends trend={trend} />
 
       <div style={{ ...card, padding: 0, overflowX: "auto" }}>
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
@@ -140,6 +146,66 @@ export default function Page() {
 
       {sel && <Detail l={sel} today={today} onClose={() => setSel(null)} />}
     </main>
+  );
+}
+
+function LineChart({ rows, yKey, color, invert, label, sub, fmtVal }) {
+  const pts = (rows || []).filter((r) => r[yKey] != null).map((r) => ({ x: r.date, y: Number(r[yKey]) }));
+  const W = 600, H = 118, padT = 10, padB = 4, plotH = H - padT - padB;
+  const box = { background: "#191919", border: "1px solid rgba(191,191,191,.1)", borderRadius: 12, padding: 14 };
+  if (pts.length < 2) return <div style={box}><div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".3px", color: "#7A7A7A", fontWeight: 700 }}>{label}</div><div style={{ color: "#666", fontSize: 12, marginTop: 10 }}>Not enough data yet.</div></div>;
+  const ys = pts.map((p) => p.y); let mn = Math.min(...ys), mx = Math.max(...ys); if (mn === mx) { mn -= 1; mx += 1; }
+  const n = pts.length;
+  const xOf = (i) => (i / (n - 1)) * W;
+  const yOf = (v) => { let nm = (v - mn) / (mx - mn); if (invert) nm = 1 - nm; return padT + (1 - nm) * plotH; };
+  const line = pts.map((p, i) => (i ? "L" : "M") + xOf(i).toFixed(1) + " " + yOf(p.y).toFixed(1)).join(" ");
+  const area = "M0 " + H + " " + pts.map((p, i) => "L" + xOf(i).toFixed(1) + " " + yOf(p.y).toFixed(1)).join(" ") + " L" + W + " " + H + " Z";
+  const gid = "g_" + yKey;
+  const last = pts[pts.length - 1].y, first = pts[0].y;
+  const up = invert ? last < first : last > first; // improvement direction
+  const fmt2 = fmtVal || ((v) => Number(v).toLocaleString("en-US"));
+  return (
+    <div style={box}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <div><div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".3px", color: "#7A7A7A", fontWeight: 700 }}>{label}</div>
+          {sub && <div style={{ fontSize: 10.5, color: "#666", marginTop: 2 }}>{sub}</div>}</div>
+        <div style={{ textAlign: "right" }}>
+          <span style={{ fontSize: 18, fontWeight: 680, color, fontVariantNumeric: "tabular-nums" }}>{fmt2(last)}</span>
+          <span style={{ fontSize: 11, marginLeft: 6, color: up ? GREEN : "#8A8A8A" }}>{up ? "▲" : "▼"}</span>
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: "100%", height: H, marginTop: 8, display: "block" }}>
+        <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.28" /><stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient></defs>
+        <path d={area} fill={`url(#${gid})`} />
+        <path d={line} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#6A6A6A", marginTop: 2 }}>
+        <span>{pts[0].x.slice(5)}</span><span>{pts[pts.length - 1].x.slice(5)}</span>
+      </div>
+    </div>
+  );
+}
+
+function Trends({ trend }) {
+  const rows = trend && trend.rows ? trend.rows : [];
+  const secTitle = { fontSize: 12, textTransform: "uppercase", letterSpacing: ".4px", color: "#7A7A7A", fontWeight: 700, margin: "0 0 4px" };
+  const posFmt = (v) => "#" + Number(v).toFixed(1);
+  const span = rows.length ? `${rows[0].d || rows[0].date} to ${rows[rows.length - 1].d || rows[rows.length - 1].date}` : "";
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <div style={secTitle}>Trends across all SEO pages{span ? ` (${rows.length} days)` : ""}</div>
+      <p style={{ color: "#7A7A7A", fontSize: 11.5, margin: "0 0 12px" }}>Every niche lander combined, one point per day. Google rank &amp; clicks are live from Metabase; registrations &amp; subscriptions are the OpenPanel first-touch snapshot{trend && trend.convAsOf ? ` (as of ${trend.convAsOf})` : ""}. On the rank chart, up means the average position is getting closer to #1.</p>
+      {!trend ? <div style={{ color: "#666", fontSize: 13 }}>Loading trends…</div> : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+          <LineChart rows={rows} yKey="position" invert color={BLUE} label="Average Google rank" sub="lower position = better; up = improving" fmtVal={posFmt} />
+          <LineChart rows={rows} yKey="clicks" color={AZ2} label="Clicks per day" sub="organic clicks, all SEO pages" />
+          <LineChart rows={rows} yKey="regs" color={GREEN} label="Registrations per day" sub="signups from SEO pages" />
+          <LineChart rows={rows} yKey="subs" color={AMBER} label="Subscriptions per day" sub="paid subs from SEO pages" />
+        </div>
+      )}
+    </div>
   );
 }
 

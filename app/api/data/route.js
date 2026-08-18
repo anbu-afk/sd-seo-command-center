@@ -1,3 +1,5 @@
+import { OP_SNAPSHOT } from "../../opSnapshot";
+
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const maxDuration = 60;
@@ -12,46 +14,6 @@ const OP_CLIENT_SECRET = process.env.OP_CLIENT_SECRET || "";
 const OP_BREAKDOWN = process.env.OP_BREAKDOWN || "properties.__path";
 const OP_DAYS = Number(process.env.OP_DAYS || 30);
 const OP_TIMEOUT = Number(process.env.OP_TIMEOUT || 20000);
-
-// Per-lander conversions from OpenPanel's first-touch attribution
-// (breakdown = properties.first_touch_landing_page). OpenPanel's key-based
-// export API cannot run this breakdown, and its report tRPC is cookie-only, so
-// the Vercel server cannot fetch it live. This is a dated snapshot pulled from
-// OpenPanel's own reports; refresh by re-pulling and redeploying.
-const OP_SNAPSHOT = {
-  asOf: "2026-08-18",
-  window: "30d",
-  source: "OpenPanel first-touch (properties.first_touch_landing_page)",
-  perLander: {
-    "gay-ai": { signups: 120, subs: 5, revenue: 275.73 },
-    "sissy-ai": { signups: 71, subs: 1, revenue: 7.99 },
-    "ai-hentai": { signups: 45, subs: 0, revenue: 0 },
-    "cuckold-ai": { signups: 45, subs: 0, revenue: 0 },
-    "ai-joi": { signups: 40, subs: 1, revenue: 7.99 },
-    "futanari-ai": { signups: 24, subs: 0, revenue: 0 },
-    "best-ai-roleplay-chat": { signups: 8, subs: 1, revenue: 19.99 },
-    "ai-boobs": { signups: 6, subs: 0, revenue: 0 },
-    "shemale-ai": { signups: 6, subs: 0, revenue: 0 },
-    "ai-anal": { signups: 5, subs: 0, revenue: 0 },
-    "twink-ai": { signups: 5, subs: 1, revenue: 7.99 },
-    "hotwife-ai": { signups: 5, subs: 1, revenue: 119.88 },
-    "ai-pussy": { signups: 4, subs: 0, revenue: 0 },
-    "femdom-ai": { signups: 4, subs: 0, revenue: 0 },
-    "fetish-ai": { signups: 3, subs: 0, revenue: 0 },
-    "milf-ai": { signups: 3, subs: 0, revenue: 0 },
-    "yandere-ai-girlfriend-simulator": { signups: 2, subs: 0, revenue: 0 },
-    "ai-fantasy": { signups: 2, subs: 1, revenue: 19.99 },
-    "ai-blowjob": { signups: 2, subs: 0, revenue: 0 },
-    "talk-to-ai-girlfriend": { signups: 1, subs: 0, revenue: 0 },
-    "replika-ai-girlfriend-review": { signups: 1, subs: 0, revenue: 0 },
-    "furry-ai": { signups: 1, subs: 0, revenue: 0 },
-    "ai-cumshot": { signups: 1, subs: 0, revenue: 0 },
-    "mistress-ai": { signups: 1, subs: 0, revenue: 0 },
-    "ntr-ai": { signups: 1, subs: 0, revenue: 0 },
-    "trans-ai": { signups: 1, subs: 0, revenue: 0 },
-    "bi-cuckold-ai": { signups: 1, subs: 1, revenue: 19.99 },
-  },
-};
 
 const SEO_SQL = `
 select slug, keyword,
