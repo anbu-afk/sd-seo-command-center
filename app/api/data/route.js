@@ -266,6 +266,11 @@ async function fetchOpenPanel(cfg) {
   if (cfg.attrib) { out.attrib = await opAttribProbe(days); return out; }
   if (cfg.paths) { out.paths = await opPathProbe(days, cfg.maxPages); return out; }
 
+  // The command center now shows SEO-page conversions (from the baked snapshot),
+  // not site-wide totals, so skip the slow OpenPanel site-wide calls by default.
+  // Request them explicitly with ?totals=1.
+  if (!cfg.totals && !cfg.debug && !cfg.breakdown) return out;
+
   // signups count (reliable), subs count + revenue estimate (one call).
   const [signupsC, sr] = await Promise.all([
     opCount("signup_completed", days),
@@ -304,6 +309,7 @@ export async function GET(request) {
     probe: u.searchParams.get("probe") === "1",
     attrib: u.searchParams.get("attrib") === "1",
     paths: u.searchParams.get("paths") === "1",
+    totals: u.searchParams.get("totals") === "1",
     maxPages: Number(u.searchParams.get("maxPages")) || 40,
   };
   const bypass = cfg.debug || cfg.breakdown || cfg.probe || cfg.attrib || cfg.paths || u.searchParams.get("fresh") === "1";
