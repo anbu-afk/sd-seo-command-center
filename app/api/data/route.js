@@ -1,5 +1,5 @@
 import { OP_SNAPSHOT } from "../../opSnapshot";
-import { opPull, opCookiePresent, opProbe } from "../../opLive";
+import { opPull, opCookiePresent, opProbe as opLiveProbe } from "../../opLive";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -280,7 +280,7 @@ export async function GET(request) {
     maxPages: Number(u.searchParams.get("maxPages")) || 40,
   };
   if (u.searchParams.get("optest") === "1") {
-    const probe = await opProbe().catch((e) => ({ error: String(e) }));
+    const probe = await opLiveProbe().catch((e) => ({ error: String(e) }));
     return Response.json({ optest: probe }, { headers: { "Cache-Control": "no-store" } });
   }
   const refresh = u.searchParams.get("refresh") === "1";
