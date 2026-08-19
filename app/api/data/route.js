@@ -1,4 +1,5 @@
 import { OP_SNAPSHOT } from "../../opSnapshot";
+import { opPull, opCookiePresent } from "../../opLive";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -262,6 +263,10 @@ async function fetchOpenPanel(cfg) {
 let CACHE = { at: 0, payload: null };
 const CACHE_TTL = Number(process.env.CACHE_TTL_MS || 600000); // 10 min
 
+// Last live OpenPanel per-lander pull (populated on ?refresh=1, reused for a while).
+let OP_LIVE = { at: 0, data: null };
+const OP_LIVE_TTL = Number(process.env.OP_LIVE_TTL_MS || 1800000); // 30 min
+
 export async function GET(request) {
   const u = new URL(request.url);
   const cfg = {
@@ -274,7 +279,8 @@ export async function GET(request) {
     totals: u.searchParams.get("totals") === "1",
     maxPages: Number(u.searchParams.get("maxPages")) || 40,
   };
-  const bypass = cfg.debug || cfg.breakdown || cfg.probe || cfg.attrib || cfg.paths || u.searchParams.get("fresh") === "1";
+  const refresh = u.searchParams.get("refresh") === "1";
+  const bypass = cfg.debug || cfg.breakdown || cfg.probe || cfg.attrib || cfg.paths || refresh || u.searchParams.get("fresh") === "1";
   if (!bypass && CACHE.payload && Date.now() - CACHE.at < CACHE_TTL) {
     return Response.json({ ...CACHE.payload, cached: true, cacheAgeMs: Date.now() - CACHE.at },
       { headers: { "Cache-Control": "no-store" } });
@@ -284,8 +290,25 @@ export async function GET(request) {
     fetchMetabase().catch((e) => ({ ok: false, error: String(e), rows: [] })),
     fetchOpenPanel(cfg).catch((e) => ({ ok: false, error: String(e), perLander: {}, totals: {}, debug: {} })),
   ]);
+  // Per-lander conversions: live from OpenPanel if a token is set and this is a
+  // refresh (or a recent live pull is still warm); otherwise the baked snapshot.
+  const slugs = (seo.rows || []).map((r) => r.slug);
+  let opLiveError = null;
+  if (opCookiePresent() && seo.ok) {
+    const warm = OP_LIVE.data && Date.now() - OP_LIVE.at < OP_LIVE_TTL;
+    if (refresh || !warm) {
+      try {
+        const pulled = await opPull(slugs);
+        if (pulled) OP_LIVE = { at: Date.now(), data: pulled };
+      } catch (e) { opLiveError = String(e.message || e).slice(0, 200); }
+    }
+  }
+  const live = !!OP_LIVE.data;
+  const perLander = live ? OP_LIVE.data.perLander : OP_SNAPSHOT.perLander;
+  const convAsOf = live ? OP_LIVE.data.asOf : OP_SNAPSHOT.asOf;
+
   const landers = (seo.rows || []).map((r) => {
-    const conv = OP_SNAPSHOT.perLander[r.slug] || {};
+    const conv = perLander[r.slug] || {};
     return {
       slug: r.slug, name: r.keyword, page_pos: r.page_pos, primary_pos: r.primary_pos,
       clicks: r.clicks_28d, impressions: r.impressions_28d, ctr: r.ctr_pct,
@@ -299,7 +322,7 @@ export async function GET(request) {
       metabase: { ok: seo.ok, error: seo.error || null, count: (seo.rows || []).length },
       openpanel: { ok: op.ok, error: op.error || null, totals: op.totals || {}, window: op.window || null, debug: op.debug || null, probe: op.probe || null, attrib: op.attrib || null, paths: op.paths || null },
     },
-    perLanderSnapshot: { asOf: OP_SNAPSHOT.asOf, window: OP_SNAPSHOT.window, source: OP_SNAPSHOT.source },
+    perLanderSnapshot: { asOf: convAsOf, window: OP_SNAPSHOT.window, source: OP_SNAPSHOT.source, live, tokenSet: opCookiePresent(), error: opLiveError },
     landers,
   };
   if (!bypass && seo.ok) CACHE = { at: Date.now(), payload };

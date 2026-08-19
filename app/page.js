@@ -36,22 +36,25 @@ export default function Page() {
   const [sel, setSel] = useState(null);
   const [trend, setTrend] = useState(null);
 
-  async function load() {
+  async function load(force) {
     setLoading(true);
+    const q = force ? "?refresh=1" : "";
     try {
-      const r = await fetch("/api/data", { cache: "no-store" });
-      setData(await r.json());
+      const [d, t] = await Promise.all([
+        fetch("/api/data" + q, { cache: "no-store" }).then((r) => r.json()),
+        fetch("/api/trend" + q, { cache: "no-store" }).then((r) => r.json()),
+      ]);
+      setData(d); setTrend(t);
     } catch (e) {}
     setLoading(false);
   }
-  useEffect(() => { load(); }, []);
-  useEffect(() => {
-    fetch("/api/trend", { cache: "no-store" }).then((r) => r.json()).then(setTrend).catch(() => {});
-  }, []);
+  useEffect(() => { load(false); }, []);
 
   const conv = (l) => ({ signups: l.signups, subs: l.subs, revenue: l.revenue });
   const snapMeta = data && data.perLanderSnapshot ? data.perLanderSnapshot : null;
   const snapDate = (snapMeta && snapMeta.asOf) || "";
+  const opLive = snapMeta && snapMeta.live;
+  const opTokenSet = snapMeta && snapMeta.tokenSet;
 
   const landers = data && data.landers ? data.landers : [];
   const mb = data && data.sources ? data.sources.metabase : null;
@@ -75,7 +78,7 @@ export default function Page() {
           <h1 style={{ margin: "6px 0 0", fontSize: 28 }}>SEO Landers, Live Command Center</h1>
           <p style={{ color: "#AFAFAF", fontSize: 14, maxWidth: "66ch" }}>Search rankings from Metabase, joined with per-lander signups, subscriptions and revenue attributed by OpenPanel. Click any lander for its weekly trend, the searches that find it, and exactly what to do next.</p>
         </div>
-        <button onClick={load} style={{ background: AZ, color: "#fff", border: 0, borderRadius: 999, padding: "9px 18px", fontWeight: 600, cursor: "pointer" }}>{loading ? "Refreshing" : "Refresh"}</button>
+        <button onClick={() => load(true)} disabled={loading} style={{ background: AZ, color: "#fff", border: 0, borderRadius: 999, padding: "9px 18px", fontWeight: 600, cursor: loading ? "default" : "pointer", opacity: loading ? .7 : 1 }}>{loading ? "Refreshing…" : "Refresh"}</button>
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "14px 0" }}>
@@ -142,7 +145,7 @@ export default function Page() {
         </table>
       </div>
 
-      <p style={{ color: "#7A7A7A", fontSize: 12, marginTop: 16 }}>SEO columns (rank, clicks, impressions) are live from Metabase on every load. The pink Signups / Subs / Revenue columns are per-lander conversions from OpenPanel, attributed by each visitor&rsquo;s first-touch landing page over the last 30 days{snapDate ? `, as of ${snapDate}` : ""}. This is a first-touch estimate, not a hard link like the SEO clicks, so read it as directional. Most subscriptions trace back to the homepage rather than a niche lander, which is why per-lander sub counts are small.</p>
+      <p style={{ color: "#7A7A7A", fontSize: 12, marginTop: 16 }}>SEO columns (rank, clicks, impressions) are live from Metabase on every load. The pink Signups / Subs / Revenue columns are per-lander conversions from OpenPanel, attributed by each visitor&rsquo;s first-touch landing page over the last 30 days{snapDate ? `, as of ${snapDate}` : ""}. This is a first-touch estimate, not a hard link like the SEO clicks, so read it as directional. Most subscriptions trace back to the homepage rather than a niche lander, which is why per-lander sub counts are small. {opLive ? "These numbers were pulled live from OpenPanel on the last Refresh." : opTokenSet ? "Click Refresh to pull today’s numbers live from OpenPanel." : "Currently a saved snapshot; set the OpenPanel token to make Refresh pull live."}</p>
 
       {sel && <Detail l={sel} today={today} onClose={() => setSel(null)} />}
     </main>
