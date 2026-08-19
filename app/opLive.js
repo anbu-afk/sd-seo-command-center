@@ -61,6 +61,20 @@ async function reportList() {
   return await trpc("report.list", { dashboardId: OP_DASHBOARD, projectId: PROJECT });
 }
 
+// Raw diagnostic: hit report.list once and return status/timing/snippet.
+export async function opProbe() {
+  const started = Date.now();
+  const url = `${OP_BASE}/api/trpc/report.list?input=${encodeURIComponent(JSON.stringify({ json: { dashboardId: OP_DASHBOARD, projectId: PROJECT } }))}`;
+  const r = await safeFetch(url, 10000);
+  return {
+    cookieLen: OP_COOKIE.length,
+    cookieHead: OP_COOKIE.slice(0, 24),
+    status: r.status,
+    ms: Date.now() - started,
+    snippet: (r.text || "").slice(0, 300),
+  };
+}
+
 async function chart(reportObj, range) {
   const cfg = strip(Object.assign({}, reportObj, { projectId: PROJECT }));
   if (range) cfg.range = range;
